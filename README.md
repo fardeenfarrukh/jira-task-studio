@@ -1,4 +1,4 @@
-# JIRA Task Studio — Lean Python POC
+# JIRA Task Studio — Python POC
 
 A small local app that turns a project PDF or pasted brief into editable Jira tickets and one CSV export.
 
