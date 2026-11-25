@@ -1,5 +1,5 @@
 import os
-
+import hashlib
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -28,6 +28,22 @@ with st.sidebar:
     model = st.text_input("Gemini model", value=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
     st.caption("The key is used by the server-side Python app. Do not commit it to Git.")
 
+    st.caption(f"Active model: {model}")
+
+    if st.button("Test Gemini connection"):
+        try:
+            test_client = genai.Client(api_key=api_key)
+
+            test_response = test_client.models.generate_content(
+                model=model,
+                contents="Reply with exactly: GEMINI WORKS"
+            )
+
+            st.success(f"Gemini connected: {test_response.text}")
+
+        except Exception as error:
+            st.error(f"Gemini connection failed: {error}")
+
 if "analysis" not in st.session_state:
     st.session_state.analysis = None
 
@@ -44,8 +60,22 @@ st.subheader("1. Add project scope")
 project_name = st.text_input("Project name (optional)")
 upload = st.file_uploader("Upload PDF, TXT or Markdown", type=["pdf", "txt", "md"])
 scope_text = st.text_area("Or paste the project scope", height=130)
+with st.expander("Debug: Request information"):
+    st.write("Project name:", project_name)
+    st.write("Model:", model)
+    st.write("API key provided:", bool(api_key.strip()))
+    st.write("Scope characters:", len(scope_text))
+    st.write(
+        "Scope SHA256:",
+        hashlib.sha256(scope_text.encode("utf-8")).hexdigest()
+    )
+    st.write("Uploaded file:", upload.name if upload else "None")
 
-if st.button("Analyze project scope", type="primary", disabled=not api_key.strip() or (not upload and not scope_text.strip())):
+if st.button("Analyze project scope", type="primary", disabled=not api_key.strip() or not model.strip() or (not upload and not scope_text.strip())):
+    st.session_state.analysis = None
+    st.session_state.tickets = None
+    st.session_state.ai_warnings = []
+
     try:
         with st.spinner("Gemini is extracting the project requirements..."):
             st.session_state.analysis = analyze_scope(
@@ -55,13 +85,14 @@ if st.button("Analyze project scope", type="primary", disabled=not api_key.strip
                 upload,
                 scope_text
             )
-            st.session_state.tickets = None
-            st.session_state.ai_warnings = []
         st.success("Scope analysis complete.")
     except Exception as exc:
         st.error(f"Analysis failed: {exc}")
 
 analysis = st.session_state.analysis
+if analysis:
+    with st.expander("Debug: Full project analysis"):
+        st.json(analysis)
 if analysis:
     st.divider()
     st.subheader("2. Review extracted requirements")
@@ -83,14 +114,36 @@ if analysis:
         type="primary",
         disabled=not api_key.strip() or not model.strip()
     ):
+        progress = st.empty()
+
         try:
-            with st.spinner("Gemini is breaking the scope into Epics and tickets..."):
-                raw = generate_tickets(genai.Client(api_key=api_key), model, analysis)
-                valid_ids = {str(r.get("id")) for r in requirements if r.get("id")}
-                st.session_state.tickets, st.session_state.ai_warnings = normalize_tickets(raw, valid_ids)
-                st.session_state.ticket_version += 1
-            st.success(f"Generated {len(st.session_state.tickets)} tickets.")
+            raw = generate_tickets(
+                genai.Client(api_key=api_key), 
+                model, 
+                analysis,
+                progress_callback=lambda message: progress.info(message)
+            )
+
+            valid_ids = {
+                str(r.get("id"))
+                for r in requirements 
+                if r.get("id")
+            }
+
+            st.session_state.tickets, st.session_state.ai_warnings = normalize_tickets(
+                raw, 
+                valid_ids
+            )
+
+            st.session_state.ticket_version += 1
+
+            progress.empty()
+            st.success(
+                f"Successfully generated {len(st.session_state.tickets)} tickets."
+            )
+
         except Exception as exc:
+            progress.empty()
             st.error(f"Ticket generation failed: {exc}")
 
 if st.session_state.tickets is not None:

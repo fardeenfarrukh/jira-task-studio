@@ -191,6 +191,12 @@ def validate_tickets(tickets):
         for ticket in tickets
     }
 
+    epic_children = {
+        ticket_id: []
+        for ticket_id, ticket in tickets_by_id.items()
+        if ticket.get("type") == "Epic"
+    }
+
     for ticket in tickets:
         ticket_id = ticket.get("id", "")
         issue_type = ticket.get("type", "")
@@ -208,28 +214,67 @@ def validate_tickets(tickets):
         if ticket.get("classification") not in CLASSIFICATIONS:
             warnings.append(f"{ticket_id}: invalid classification")
 
-        if parent_id:
-            if parent_id == ticket_id:
-                warnings.append(f"{ticket_id}: ticket cannot be its own parent")
+        if issue_type == "Epic" and parent_id:
+            warnings.append(f"{ticket_id}: an Epic should not have a parent")
+        
+        elif issue_type == "Epic":
+            continue
 
-            elif parent_id not in known_ids:
-                warnings.append(f"{ticket_id}: parent {parent_id} does not exist")
+        elif not parent_id:
+            warnings.append(
+                f"{ticket_id}: {issue_type} is missing a parent"
+            )
 
-            else:
-                parent = tickets_by_id[parent_id]
-                parent_type = parent.get("type", "")
+        elif parent_id == ticket_id:
+            warnings.append(
+                f"{ticket_id}: ticket cannot be its own parent"
+            )
 
-                if issue_type == "Epic":
-                    warnings.append(f"{ticket_id}: an Epic should not have a parent")
+        elif parent_id not in known_ids:
+            warnings.append(
+                f"{ticket_id}: parent {parent_id} does not exist"
+            )
 
-                elif issue_type == "Subtask" and parent_type in ["Epic", "Subtask"]:
+        else:
+            parent = tickets_by_id[parent_id]
+            parent_type = parent.get("type", "")
+
+            if issue_type == "Subtask":
+                if parent_type in ["Epic", "Subtask"]:
                     warnings.append(
-                        f"{ticket_id}: a Subtask needs a standard issue as its parent"
+                        f"{ticket_id}: a Subtask needs a Story, Task, "
+                        "or Bug as its parent"
                     )
 
-                elif issue_type != "Subtask" and parent_type != "Epic":
-                    warnings.append(
-                        f"{ticket_id}: a {issue_type} normally belongs under an Epic"
-                    )
+            elif parent_type != "Epic":
+                warnings.append(
+                    f"{ticket_id}: a {issue_type} normally belongs "
+                    "under an Epic"
+                )
+
+            if parent_type == "Epic":
+                epic_children[parent_id].append(ticket_id)
+
+    # Check for Epics without actionable children.
+    for epic_id, children in epic_children.items():
+        if not children:
+            warnings.append(
+                f"{epic_id}: Epic has no child tickets"
+            )
+
+    # Check for circular parent relationships.
+    for ticket in tickets:
+        visited = set()
+        current_id = ticket.get("id", "")
+
+        while current_id in tickets_by_id:
+            if current_id in visited:
+                warnings.append(
+                    f"{ticket.get('id')}: circular parent relationship detected"
+                )
+                break
+
+            visited.add(current_id)
+            current_id = tickets_by_id[current_id].get("parent_id", "")
 
     return sorted(set(warnings))
